@@ -270,11 +270,12 @@ async def stream_updates():
 
 
 async def monitoring_loop():
-    """Main monitoring loop that polls APIs and detects arbitrage."""
+    """Main monitoring loop with real orderbook data from both platforms."""
     print("🚀 Starting arbitrage monitoring loop...")
     print(f"   Polling interval: {POLL_INTERVAL}s")
     print(f"   Min profit threshold: {MIN_PROFIT_CENTS}¢")
     print(f"   Log file: {LOG_FILE}")
+    print("   Using REAL orderbook asks (CLOB API for Polymarket)")
     print()
     
     async with KalshiClient(KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH) as kalshi, \
@@ -289,42 +290,68 @@ async def monitoring_loop():
             try:
                 print(f"[{scan_start.strftime('%H:%M:%S')}] Scan #{iteration}")
                 
-                # Fetch markets concurrently
+                # Fetch markets concurrently (Kalshi: non-sports only)
                 poly_markets, kalshi_markets = await asyncio.gather(
                     poly.get_markets(limit=100),
-                    kalshi.get_markets(status="open", limit=200)
+                    kalshi.get_non_sports_markets(limit=100)
                 )
                 
                 print(f"  ├─ Polymarket: {len(poly_markets)} markets")
                 print(f"  ├─ Kalshi: {len(kalshi_markets)} markets")
                 
-                # Fetch Kalshi orderbooks for all tickers
-                kalshi_orderbooks = {}
-                kalshi_tickers = [m.get('ticker') for m in kalshi_markets if m.get('ticker')]
+                # Get matched pairs first
+                matched_pairs = detector.get_matched_pairs(poly_markets, kalshi_markets)
+                print(f"  ├─ Matched pairs: {len(matched_pairs)}")
                 
-                # Fetch orderbooks in batches to avoid overwhelming the API
-                for ticker in kalshi_tickers[:50]:  # Limit to first 50 for speed
-                    orderbook = await kalshi.get_orderbook(ticker)
-                    if orderbook:
-                        kalshi_orderbooks[ticker] = orderbook
+                if not matched_pairs:
+                    print(f"  └─ No matched markets to check")
+                    latest_stats.update({
+                        "last_scan": scan_start.strftime('%H:%M:%S'),
+                        "poly_markets_count": len(poly_markets),
+                        "kalshi_markets_count": len(kalshi_markets),
+                        "matched_pairs": 0,
+                        "opportunities_found": len(detector.opportunities),
+                        "total_logged": len(detector.opportunities)
+                    })
+                    await asyncio.sleep(POLL_INTERVAL)
+                    continue
                 
-                print(f"  ├─ Fetched {len(kalshi_orderbooks)} Kalshi orderbooks")
+                # Fetch orderbooks for matched pairs only
+                all_opportunities = []
+                orderbooks_fetched = 0
                 
-                # Detect arbitrage
-                opportunities = detector.detect_arbitrage(
-                    poly_markets,
-                    kalshi_markets,
-                    kalshi_orderbooks
-                )
+                for poly_market, kalshi_market in matched_pairs:
+                    kalshi_ticker = kalshi_market.get('ticker', '')
+                    
+                    # Fetch both orderbooks concurrently
+                    poly_orderbook, kalshi_orderbook = await asyncio.gather(
+                        poly.get_market_orderbooks(poly_market),
+                        kalshi.get_orderbook(kalshi_ticker)
+                    )
+                    
+                    if poly_orderbook:
+                        orderbooks_fetched += 1
+                    
+                    # Detect arbitrage with real prices
+                    opportunities = detector.detect_arbitrage_with_orderbooks(
+                        poly_market,
+                        kalshi_market,
+                        poly_orderbook,
+                        kalshi_orderbook
+                    )
+                    
+                    all_opportunities.extend(opportunities)
+                
+                print(f"  ├─ Fetched {orderbooks_fetched} Poly + {len(matched_pairs)} Kalshi orderbooks")
                 
                 # Log opportunities
-                for opp in opportunities:
+                for opp in all_opportunities:
                     await detector.log_opportunity(opp)
                     print(f"  └─ 🎯 ARB FOUND: {opp.market_pair[:60]}...")
                     print(f"     Strategy: {opp.strategy}")
                     print(f"     Profit: +{opp.profit_cents:.2f}¢")
                 
-                if not opportunities:
+                if not all_opportunities:
                     print(f"  └─ No arbitrage opportunities detected")
                 
                 # Update global stats
@@ -332,7 +359,7 @@ async def monitoring_loop():
                     "last_scan": scan_start.strftime('%H:%M:%S'),
                     "poly_markets_count": len(poly_markets),
                     "kalshi_markets_count": len(kalshi_markets),
-                    "matched_pairs": len(opportunities),
+                    "matched_pairs": len(matched_pairs),
                     "opportunities_found": len(detector.opportunities),
                     "total_logged": len(detector.opportunities)
                 })
@@ -341,6 +368,8 @@ async def monitoring_loop():
                 
             except Exception as e:
                 print(f"  └─ ❌ Error: {e}")
+                import traceback
+                traceback.print_exc()
                 print()
             
             # Wait for next iteration

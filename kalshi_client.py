@@ -85,3 +85,56 @@ class KalshiClient:
                 return {}
             data = await resp.json()
             return data.get("orderbook", {})
+    
+    async def get_events(self, status: str = "open", limit: int = 100) -> List[Dict[str, Any]]:
+        """Fetch events from Kalshi."""
+        path = f"/events?status={status}&limit={limit}"
+        headers = self._get_headers("GET", path)
+        
+        async with self.session.get(f"{self.BASE_URL}{path}", headers=headers) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise Exception(f"Kalshi events API error: {resp.status} - {text}")
+            data = await resp.json()
+            return data.get("events", [])
+    
+    async def get_markets_for_event(self, event_ticker: str) -> List[Dict[str, Any]]:
+        """Fetch all markets for a specific event using series_ticker."""
+        # Extract series ticker (remove the -XX suffix)
+        series_ticker = event_ticker.rsplit('-', 1)[0] if '-' in event_ticker else event_ticker
+        path = f"/markets?series_ticker={series_ticker}&limit=50"
+        headers = self._get_headers("GET", path)
+        
+        async with self.session.get(f"{self.BASE_URL}{path}", headers=headers) as resp:
+            if resp.status != 200:
+                return []
+            data = await resp.json()
+            return data.get("markets", [])
+    
+    async def get_non_sports_markets(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Fetch open markets excluding sports categories."""
+        # Get events first
+        events = await self.get_events(status="open", limit=100)
+        
+        # Filter to non-sports categories
+        non_sports_categories = ['Politics', 'Financials', 'Science and Technology', 
+                                  'Climate and Weather', 'Social', 'World', 'Entertainment']
+        
+        non_sports_events = [
+            e for e in events 
+            if e.get('category') in non_sports_categories
+        ]
+        
+        # Get markets for each non-sports event
+        all_markets = []
+        for event in non_sports_events[:20]:  # Limit to avoid too many API calls
+            markets = await self.get_markets_for_event(event.get('event_ticker', ''))
+            for m in markets:
+                m['event_title'] = event.get('title', '')
+                m['category'] = event.get('category', '')
+            all_markets.extend(markets)
+            
+            if len(all_markets) >= limit:
+                break
+        
+        return all_markets[:limit]

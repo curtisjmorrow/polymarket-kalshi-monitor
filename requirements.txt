@@ -6,3 +6,6 @@ pandas==2.2.0
 cryptography==42.0.0
 pydantic==2.5.3
 sse-starlette==1.8.2
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.25.1
+sentence-transformers==2.2.2
