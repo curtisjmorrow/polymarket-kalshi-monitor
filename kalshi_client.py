@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import time
+import asyncio
 from typing import Optional, Dict, Any, List
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -63,40 +64,51 @@ class KalshiClient:
             "Content-Type": "application/json"
         }
     
+    async def _request_with_retry(self, method: str, url: str, headers: Dict[str, str], 
+                                   max_retries: int = 3) -> Optional[Dict[str, Any]]:
+        """Make HTTP request with exponential backoff on 429."""
+        for attempt in range(max_retries):
+            async with self.session.request(method, url, headers=headers) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                elif resp.status == 429:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 0.5  # 0.5s, 1s, 2s
+                        print(f"⚠️ Kalshi rate limit hit, retrying in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"❌ Kalshi rate limit exceeded after {max_retries} retries")
+                        return None
+                else:
+                    text = await resp.text()
+                    print(f"⚠️ Kalshi API error: {resp.status} - {text}")
+                    return None
+        return None
+    
     async def get_markets(self, status: str = "open", limit: int = 200) -> List[Dict[str, Any]]:
         """Fetch active markets from Kalshi."""
         path = f"/markets?status={status}&limit={limit}"
         headers = self._get_headers("GET", path)
         
-        async with self.session.get(f"{self.BASE_URL}{path}", headers=headers) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise Exception(f"Kalshi API error: {resp.status} - {text}")
-            data = await resp.json()
-            return data.get("markets", [])
+        data = await self._request_with_retry("GET", f"{self.BASE_URL}{path}", headers)
+        return data.get("markets", []) if data else []
     
     async def get_orderbook(self, ticker: str) -> Dict[str, Any]:
         """Fetch orderbook for a specific market."""
         path = f"/markets/{ticker}/orderbook"
         headers = self._get_headers("GET", path)
         
-        async with self.session.get(f"{self.BASE_URL}{path}", headers=headers) as resp:
-            if resp.status != 200:
-                return {}
-            data = await resp.json()
-            return data.get("orderbook", {})
+        data = await self._request_with_retry("GET", f"{self.BASE_URL}{path}", headers)
+        return data.get("orderbook", {}) if data else {}
     
     async def get_events(self, status: str = "open", limit: int = 100) -> List[Dict[str, Any]]:
         """Fetch events from Kalshi."""
         path = f"/events?status={status}&limit={limit}"
         headers = self._get_headers("GET", path)
         
-        async with self.session.get(f"{self.BASE_URL}{path}", headers=headers) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise Exception(f"Kalshi events API error: {resp.status} - {text}")
-            data = await resp.json()
-            return data.get("events", [])
+        data = await self._request_with_retry("GET", f"{self.BASE_URL}{path}", headers)
+        return data.get("events", []) if data else []
     
     async def get_markets_for_event(self, event_ticker: str) -> List[Dict[str, Any]]:
         """Fetch all markets for a specific event using series_ticker."""
@@ -105,11 +117,8 @@ class KalshiClient:
         path = f"/markets?series_ticker={series_ticker}&limit=50"
         headers = self._get_headers("GET", path)
         
-        async with self.session.get(f"{self.BASE_URL}{path}", headers=headers) as resp:
-            if resp.status != 200:
-                return []
-            data = await resp.json()
-            return data.get("markets", [])
+        data = await self._request_with_retry("GET", f"{self.BASE_URL}{path}", headers)
+        return data.get("markets", []) if data else []
     
     async def get_non_sports_markets(self, limit: int = 200) -> List[Dict[str, Any]]:
         """Fetch open markets excluding sports categories."""

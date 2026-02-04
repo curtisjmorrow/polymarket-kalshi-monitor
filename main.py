@@ -292,11 +292,11 @@ async def monitoring_loop():
                 print(f"[{scan_start.strftime('%H:%M:%S')}] Scan #{iteration}")
                 
                 # Fetch markets concurrently (Kalshi: non-sports only)
-                # Polymarket: 300 req/10s limit on /markets, using 200 for safety
-                # Kalshi: Conservative limit, can increase if needed
+                # Polymarket: 300 req/10s limit on /markets, using 250 (83% capacity)
+                # Kalshi: ~25 req/s peak load, on edge but with backoff safety
                 poly_markets, kalshi_markets = await asyncio.gather(
-                    poly.get_markets(limit=200),
-                    kalshi.get_non_sports_markets(limit=150)
+                    poly.get_markets(limit=250),
+                    kalshi.get_non_sports_markets(limit=250)
                 )
                 
                 print(f"  ├─ Polymarket: {len(poly_markets)} markets")
@@ -365,7 +365,7 @@ async def monitoring_loop():
                 # Build price maps
                 # CLOB /price limit: 1500 req/10s, can check ALL markets if needed
                 poly_prices = {}
-                for poly_market in poly_markets[:200]:  # Check all fetched markets
+                for poly_market in poly_markets[:250]:  # Check all fetched markets
                     poly_id = poly_market.get('condition_id', '')
                     tokens = poly_market.get('tokens', [])
                     if len(tokens) >= 1:
@@ -377,7 +377,7 @@ async def monitoring_loop():
                                 poly_prices[poly_id] = ask
                 
                 kalshi_prices = {}
-                for kalshi_market in kalshi_markets[:150]:  # Check all fetched markets
+                for kalshi_market in kalshi_markets[:250]:  # Check all fetched markets
                     ticker = kalshi_market.get('ticker', '')
                     orderbook = await kalshi.get_orderbook(ticker)
                     if orderbook:
@@ -390,13 +390,13 @@ async def monitoring_loop():
                 
                 # Scan for temporal arbitrage on each platform
                 poly_violations = detector.logical_detector.scan_for_temporal_arbitrage(
-                    poly_markets[:200],  # All fetched markets
+                    poly_markets[:250],  # All fetched markets
                     poly_prices,
                     "polymarket"
                 )
                 
                 kalshi_violations = detector.logical_detector.scan_for_temporal_arbitrage(
-                    kalshi_markets[:150],  # All fetched markets
+                    kalshi_markets[:250],  # All fetched markets
                     kalshi_prices,
                     "kalshi"
                 )
