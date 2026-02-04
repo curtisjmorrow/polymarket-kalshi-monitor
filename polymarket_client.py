@@ -90,3 +90,31 @@ class PolymarketClient:
                 }
         
         return results
+    
+    async def get_multi_outcome_prices(self, market: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Get prices for all outcomes in a multi-outcome market.
+        
+        Returns: [{"outcome": str, "yes_ask": float, "yes_bid": float, "token_id": str}, ...]
+        """
+        results = []
+        tokens = market.get('tokens', [])
+        
+        for token in tokens:
+            token_id = token.get('token_id', '')
+            outcome = token.get('outcome', 'Unknown')
+            
+            if not token_id:
+                continue
+            
+            bid, ask = await self.get_best_prices(token_id)
+            
+            if ask is not None:  # Only include if we have ask price
+                results.append({
+                    "outcome": outcome,
+                    "yes_ask": ask,
+                    "yes_bid": bid or 0.0,
+                    "token_id": token_id
+                })
+        
+        return results

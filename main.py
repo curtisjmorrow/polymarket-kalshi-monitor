@@ -214,7 +214,7 @@ async def dashboard():
                     } else {
                         list.innerHTML = data.opportunities.map(opp => `
                             <div class="opp-item">
-                                <div class="opp-time">${new Date(opp.timestamp).toLocaleString()}</div>
+                                <div class="opp-time">${new Date(opp.timestamp).toLocaleString()} • Type: ${opp.arb_type || 'cross_exchange'}</div>
                                 <div class="opp-markets">${opp.market_pair}</div>
                                 <div class="opp-details">
                                     <div>Strategy: <span class="opp-detail-value">${opp.strategy}</span></div>
@@ -253,7 +253,8 @@ async def stream_updates():
                         "strategy": opp.strategy,
                         "poly_price": opp.poly_price,
                         "kalshi_price": opp.kalshi_price,
-                        "profit_cents": opp.profit_cents
+                        "profit_cents": opp.profit_cents,
+                        "arb_type": opp.arb_type
                     }
                     for opp in detector.opportunities[-20:]  # Last 20 opportunities
                 ]
@@ -291,9 +292,11 @@ async def monitoring_loop():
                 print(f"[{scan_start.strftime('%H:%M:%S')}] Scan #{iteration}")
                 
                 # Fetch markets concurrently (Kalshi: non-sports only)
+                # Polymarket: 300 req/10s limit on /markets, using 200 for safety
+                # Kalshi: Conservative limit, can increase if needed
                 poly_markets, kalshi_markets = await asyncio.gather(
-                    poly.get_markets(limit=100),
-                    kalshi.get_non_sports_markets(limit=100)
+                    poly.get_markets(limit=200),
+                    kalshi.get_non_sports_markets(limit=150)
                 )
                 
                 print(f"  ├─ Polymarket: {len(poly_markets)} markets")
@@ -316,10 +319,11 @@ async def monitoring_loop():
                     await asyncio.sleep(POLL_INTERVAL)
                     continue
                 
-                # Fetch orderbooks for matched pairs only
+                # Fetch orderbooks for matched pairs + check multi-outcome arbs
                 all_opportunities = []
                 orderbooks_fetched = 0
                 
+                # 1. Check matched pairs (cross-exchange + intra-exchange binary)
                 for poly_market, kalshi_market in matched_pairs:
                     kalshi_ticker = kalshi_market.get('ticker', '')
                     
@@ -332,7 +336,7 @@ async def monitoring_loop():
                     if poly_orderbook:
                         orderbooks_fetched += 1
                     
-                    # Detect arbitrage with real prices
+                    # Detect arbitrage with real prices (includes intra-exchange YES/NO spread)
                     opportunities = detector.detect_arbitrage_with_orderbooks(
                         poly_market,
                         kalshi_market,
@@ -342,7 +346,72 @@ async def monitoring_loop():
                     
                     all_opportunities.extend(opportunities)
                 
+                # 2. Check Polymarket multi-outcome markets (unmatched markets with 3+ outcomes)
+                # CLOB /price limit: 1500 req/10s, using 100 for safety (leaves room for matched pairs)
+                for poly_market in poly_markets[:100]:
+                    tokens = poly_market.get('tokens', [])
+                    if len(tokens) >= 3:  # Multi-outcome market
+                        outcome_prices = await poly.get_multi_outcome_prices(poly_market)
+                        if len(outcome_prices) >= 3:
+                            multi_opp = detector.detect_multi_outcome_arbitrage(
+                                poly_market,
+                                outcome_prices,
+                                "polymarket"
+                            )
+                            if multi_opp:
+                                all_opportunities.append(multi_opp)
+                
+                # 3. Check for logical constraint violations (temporal superset, etc.)
+                # Build price maps
+                # CLOB /price limit: 1500 req/10s, can check ALL markets if needed
+                poly_prices = {}
+                for poly_market in poly_markets[:200]:  # Check all fetched markets
+                    poly_id = poly_market.get('condition_id', '')
+                    tokens = poly_market.get('tokens', [])
+                    if len(tokens) >= 1:
+                        # Use first token's price as market price (typically YES)
+                        token_id = tokens[0].get('token_id', '')
+                        if token_id:
+                            _, ask = await poly.get_best_prices(token_id)
+                            if ask:
+                                poly_prices[poly_id] = ask
+                
+                kalshi_prices = {}
+                for kalshi_market in kalshi_markets[:150]:  # Check all fetched markets
+                    ticker = kalshi_market.get('ticker', '')
+                    orderbook = await kalshi.get_orderbook(ticker)
+                    if orderbook:
+                        yes_bids = orderbook.get('yes', [])
+                        no_bids = orderbook.get('no', [])
+                        if yes_bids and no_bids:
+                            best_no_bid = no_bids[-1][0] if no_bids else 0
+                            yes_ask = (100 - best_no_bid) / 100.0
+                            kalshi_prices[ticker] = yes_ask
+                
+                # Scan for temporal arbitrage on each platform
+                poly_violations = detector.logical_detector.scan_for_temporal_arbitrage(
+                    poly_markets[:200],  # All fetched markets
+                    poly_prices,
+                    "polymarket"
+                )
+                
+                kalshi_violations = detector.logical_detector.scan_for_temporal_arbitrage(
+                    kalshi_markets[:150],  # All fetched markets
+                    kalshi_prices,
+                    "kalshi"
+                )
+                
+                # Convert violations to opportunities
+                for violation in poly_violations:
+                    opp = detector.convert_violation_to_opportunity(violation, "polymarket")
+                    all_opportunities.append(opp)
+                
+                for violation in kalshi_violations:
+                    opp = detector.convert_violation_to_opportunity(violation, "kalshi")
+                    all_opportunities.append(opp)
+                
                 print(f"  ├─ Fetched {orderbooks_fetched} Poly + {len(matched_pairs)} Kalshi orderbooks")
+                print(f"  ├─ Found {len(poly_violations)} Poly + {len(kalshi_violations)} Kalshi logical violations")
                 
                 # Log opportunities
                 for opp in all_opportunities:
