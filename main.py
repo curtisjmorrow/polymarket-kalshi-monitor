@@ -1,0 +1,374 @@
+"""Main monitoring loop and web dashboard."""
+import asyncio
+import os
+from datetime import datetime
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from sse_starlette.sse import EventSourceResponse
+import uvicorn
+import json
+
+from kalshi_client import KalshiClient
+from polymarket_client import PolymarketClient
+from arbitrage_detector import ArbitrageDetector
+
+load_dotenv()
+
+# Configuration
+KALSHI_API_KEY = os.getenv("KALSHI_API_KEY")
+KALSHI_PRIVATE_KEY_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH", "kalshi.pem")
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "10"))
+MIN_PROFIT_CENTS = float(os.getenv("MIN_PROFIT_CENTS", "1.0"))
+LOG_FILE = os.getenv("LOG_FILE", "arb_opportunities.csv")
+
+# Global state
+detector = ArbitrageDetector(MIN_PROFIT_CENTS, LOG_FILE)
+latest_stats = {
+    "last_scan": None,
+    "poly_markets_count": 0,
+    "kalshi_markets_count": 0,
+    "matched_pairs": 0,
+    "opportunities_found": 0,
+    "total_logged": 0
+}
+
+app = FastAPI(title="Polymarket-Kalshi Arbitrage Monitor")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    """Serve the main dashboard HTML."""
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Arbitrage Monitor</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                font-family: 'SF Mono', Monaco, monospace;
+                background: #0a0a0a;
+                color: #00ff41;
+                padding: 20px;
+            }
+            .header {
+                border-bottom: 2px solid #00ff41;
+                padding-bottom: 20px;
+                margin-bottom: 20px;
+            }
+            h1 {
+                font-size: 24px;
+                font-weight: 600;
+                letter-spacing: -0.5px;
+            }
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 15px;
+                margin-bottom: 30px;
+            }
+            .stat-card {
+                background: #111;
+                border: 1px solid #333;
+                padding: 15px;
+                border-radius: 4px;
+            }
+            .stat-label {
+                color: #666;
+                font-size: 12px;
+                margin-bottom: 5px;
+            }
+            .stat-value {
+                font-size: 24px;
+                font-weight: 700;
+            }
+            .opportunities {
+                background: #111;
+                border: 1px solid #333;
+                border-radius: 4px;
+                padding: 20px;
+            }
+            .opp-header {
+                font-size: 18px;
+                margin-bottom: 15px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #333;
+            }
+            .opp-item {
+                background: #0a0a0a;
+                border: 1px solid #222;
+                padding: 15px;
+                margin-bottom: 10px;
+                border-radius: 4px;
+                border-left: 3px solid #00ff41;
+            }
+            .opp-time {
+                color: #666;
+                font-size: 11px;
+                margin-bottom: 8px;
+            }
+            .opp-markets {
+                font-size: 13px;
+                margin-bottom: 8px;
+                color: #00ff41;
+            }
+            .opp-details {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 10px;
+                font-size: 12px;
+                color: #888;
+            }
+            .opp-detail-value {
+                color: #00ff41;
+                font-weight: 600;
+            }
+            .profit-highlight {
+                color: #ffaa00;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            .no-opps {
+                color: #666;
+                text-align: center;
+                padding: 40px;
+                font-size: 14px;
+            }
+            .status-online {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                background: #00ff41;
+                border-radius: 50%;
+                margin-right: 8px;
+                animation: pulse 2s infinite;
+            }
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.5; }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>⚙️ Arbitrage Monitor <span class="status-online"></span></h1>
+        </div>
+        
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <div class="stat-label">Last Scan</div>
+                <div class="stat-value" id="last-scan">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Polymarket Markets</div>
+                <div class="stat-value" id="poly-count">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Kalshi Markets</div>
+                <div class="stat-value" id="kalshi-count">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Matched Pairs</div>
+                <div class="stat-value" id="matched-count">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Opportunities (Session)</div>
+                <div class="stat-value" id="opps-count">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Logged (CSV)</div>
+                <div class="stat-value" id="total-logged">0</div>
+            </div>
+        </div>
+        
+        <div class="opportunities">
+            <div class="opp-header">Live Opportunities</div>
+            <div id="opportunities-list">
+                <div class="no-opps">Waiting for data...</div>
+            </div>
+        </div>
+        
+        <script>
+            const evtSource = new EventSource("/stream");
+            
+            evtSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                // Update stats
+                if (data.stats) {
+                    document.getElementById('last-scan').textContent = data.stats.last_scan || '--';
+                    document.getElementById('poly-count').textContent = data.stats.poly_markets_count || 0;
+                    document.getElementById('kalshi-count').textContent = data.stats.kalshi_markets_count || 0;
+                    document.getElementById('matched-count').textContent = data.stats.matched_pairs || 0;
+                    document.getElementById('opps-count').textContent = data.stats.opportunities_found || 0;
+                    document.getElementById('total-logged').textContent = data.stats.total_logged || 0;
+                }
+                
+                // Update opportunities list
+                if (data.opportunities) {
+                    const list = document.getElementById('opportunities-list');
+                    
+                    if (data.opportunities.length === 0) {
+                        list.innerHTML = '<div class="no-opps">No arbitrage opportunities detected yet.</div>';
+                    } else {
+                        list.innerHTML = data.opportunities.map(opp => `
+                            <div class="opp-item">
+                                <div class="opp-time">${new Date(opp.timestamp).toLocaleString()}</div>
+                                <div class="opp-markets">${opp.market_pair}</div>
+                                <div class="opp-details">
+                                    <div>Strategy: <span class="opp-detail-value">${opp.strategy}</span></div>
+                                    <div>Poly: <span class="opp-detail-value">$${opp.poly_price.toFixed(4)}</span></div>
+                                    <div>Kalshi: <span class="opp-detail-value">$${opp.kalshi_price.toFixed(4)}</span></div>
+                                    <div>Profit: <span class="profit-highlight">+${opp.profit_cents.toFixed(2)}¢</span></div>
+                                </div>
+                            </div>
+                        `).join('');
+                    }
+                }
+            };
+            
+            evtSource.onerror = () => {
+                console.error('SSE connection error');
+            };
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
+
+
+@app.get("/stream")
+async def stream_updates():
+    """SSE endpoint for live updates."""
+    async def event_generator():
+        while True:
+            # Send current state
+            data = {
+                "stats": latest_stats,
+                "opportunities": [
+                    {
+                        "timestamp": opp.timestamp,
+                        "market_pair": opp.market_pair,
+                        "strategy": opp.strategy,
+                        "poly_price": opp.poly_price,
+                        "kalshi_price": opp.kalshi_price,
+                        "profit_cents": opp.profit_cents
+                    }
+                    for opp in detector.opportunities[-20:]  # Last 20 opportunities
+                ]
+            }
+            
+            yield {
+                "event": "message",
+                "data": json.dumps(data)
+            }
+            
+            await asyncio.sleep(2)  # Update every 2 seconds
+    
+    return EventSourceResponse(event_generator())
+
+
+async def monitoring_loop():
+    """Main monitoring loop that polls APIs and detects arbitrage."""
+    print("🚀 Starting arbitrage monitoring loop...")
+    print(f"   Polling interval: {POLL_INTERVAL}s")
+    print(f"   Min profit threshold: {MIN_PROFIT_CENTS}¢")
+    print(f"   Log file: {LOG_FILE}")
+    print()
+    
+    async with KalshiClient(KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH) as kalshi, \
+               PolymarketClient() as poly:
+        
+        iteration = 0
+        
+        while True:
+            iteration += 1
+            scan_start = datetime.utcnow()
+            
+            try:
+                print(f"[{scan_start.strftime('%H:%M:%S')}] Scan #{iteration}")
+                
+                # Fetch markets concurrently
+                poly_markets, kalshi_markets = await asyncio.gather(
+                    poly.get_markets(limit=100),
+                    kalshi.get_markets(status="open", limit=200)
+                )
+                
+                print(f"  ├─ Polymarket: {len(poly_markets)} markets")
+                print(f"  ├─ Kalshi: {len(kalshi_markets)} markets")
+                
+                # Fetch Kalshi orderbooks for all tickers
+                kalshi_orderbooks = {}
+                kalshi_tickers = [m.get('ticker') for m in kalshi_markets if m.get('ticker')]
+                
+                # Fetch orderbooks in batches to avoid overwhelming the API
+                for ticker in kalshi_tickers[:50]:  # Limit to first 50 for speed
+                    orderbook = await kalshi.get_orderbook(ticker)
+                    if orderbook:
+                        kalshi_orderbooks[ticker] = orderbook
+                
+                print(f"  ├─ Fetched {len(kalshi_orderbooks)} Kalshi orderbooks")
+                
+                # Detect arbitrage
+                opportunities = detector.detect_arbitrage(
+                    poly_markets,
+                    kalshi_markets,
+                    kalshi_orderbooks
+                )
+                
+                # Log opportunities
+                for opp in opportunities:
+                    await detector.log_opportunity(opp)
+                    print(f"  └─ 🎯 ARB FOUND: {opp.market_pair[:60]}...")
+                    print(f"     Strategy: {opp.strategy}")
+                    print(f"     Profit: +{opp.profit_cents:.2f}¢")
+                
+                if not opportunities:
+                    print(f"  └─ No arbitrage opportunities detected")
+                
+                # Update global stats
+                latest_stats.update({
+                    "last_scan": scan_start.strftime('%H:%M:%S'),
+                    "poly_markets_count": len(poly_markets),
+                    "kalshi_markets_count": len(kalshi_markets),
+                    "matched_pairs": len(opportunities),
+                    "opportunities_found": len(detector.opportunities),
+                    "total_logged": len(detector.opportunities)
+                })
+                
+                print()
+                
+            except Exception as e:
+                print(f"  └─ ❌ Error: {e}")
+                print()
+            
+            # Wait for next iteration
+            await asyncio.sleep(POLL_INTERVAL)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the monitoring loop when the server starts."""
+    asyncio.create_task(monitoring_loop())
+
+
+if __name__ == "__main__":
+    import sys
+    sys.stdout = sys.stderr  # Force all output to stderr for nohup
+    
+    print("=" * 80, flush=True)
+    print("⚙️  POLYMARKET-KALSHI ARBITRAGE MONITOR", flush=True)
+    print("=" * 80, flush=True)
+    print(flush=True)
+    print("Configuration:", flush=True)
+    print(f"  • Kalshi API Key: {KALSHI_API_KEY[:20]}...", flush=True)
+    print(f"  • Poll Interval: {POLL_INTERVAL}s", flush=True)
+    print(f"  • Min Profit: {MIN_PROFIT_CENTS}¢", flush=True)
+    print(f"  • Log File: {LOG_FILE}", flush=True)
+    print(flush=True)
+    print("Dashboard will be available at: http://localhost:8080", flush=True)
+    print("=" * 80, flush=True)
+    print(flush=True)
+    
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
