@@ -1,129 +1,153 @@
 # Polymarket-Kalshi Arbitrage Monitor
 
-Real-time arbitrage opportunity detection between Polymarket and Kalshi prediction markets.
+Real-time arbitrage detection system for Polymarket and Kalshi prediction markets.
 
 ## Features
 
-- **Live Dashboard** - Real-time web UI showing detected opportunities
-- **CSV Logging** - Timestamped record of every arbitrage opportunity
-- **Dual API Support** - Polymarket (Gamma API) + Kalshi (REST with RSA signing)
-- **Fast Polling** - Configurable scan interval (default: 10 seconds)
-- **Monitor Mode** - Detection-only by default (no execution)
+- **Real-time monitoring** of Polymarket (Gamma API) and Kalshi (REST API)
+- **Web dashboard** with live stats and opportunity feed
+- **CSV logging** of all detected arbitrage opportunities
+- **Dual mode**: Monitor-only (current) or execution-enabled (future)
 
-## Requirements
+## Architecture
 
-- Python 3.9+
-- Kalshi API credentials (API key + RSA private key)
-- Polymarket private key (optional, for future execution mode)
+- **Python 3.12** with asyncio
+- **FastAPI** web server + SSE for real-time updates
+- **Kalshi API** with RSA request signing
+- **Polymarket Gamma API** (public data)
 
-## Installation
+## Quick Start
+
+### 1. Install Dependencies
 
 ```bash
-# Clone the repository
-git clone https://github.com/curtisjmorrow/polymarket-kalshi-monitor.git
-cd polymarket-kalshi-monitor
-
-# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Configuration
+### 2. Configure Credentials
 
-Copy `.env.example` to `.env` and configure:
+Copy `.env.example` to `.env` and add your credentials:
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```
-KALSHI_API_KEY=your_kalshi_api_key
+KALSHI_API_KEY=your_api_key_here
 KALSHI_PRIVATE_KEY_PATH=kalshi.pem
-
 POLL_INTERVAL_SECONDS=10
 MIN_PROFIT_CENTS=1.0
 LOG_FILE=arb_opportunities.csv
-
-# Optional - for future execution mode
-POLYMARKET_PRIVATE_KEY=
-EXECUTION_ENABLED=false
 ```
 
 Place your Kalshi RSA private key in `kalshi.pem`.
 
-## Usage
-
-Start the monitor:
+### 3. Run the Monitor
 
 ```bash
 python main.py
 ```
 
-Access the dashboard at: **http://localhost:8080**
+Dashboard will be available at: **http://localhost:8080**
 
 ## How It Works
 
-1. **Market Fetching**: Polls Polymarket (Gamma API) and Kalshi (REST API) every N seconds
-2. **Market Matching**: Fuzzy matches markets by title similarity (30% keyword overlap threshold)
-3. **Arbitrage Detection**: For each matched pair, calculates:
-   - Strategy 1: Buy YES on Polymarket + Buy NO on Kalshi
-   - Strategy 2: Buy YES on Kalshi + Buy NO on Polymarket
-4. **Logging**: Any opportunity where `total_cost < $1.00` is logged to CSV
+### Arbitrage Detection
 
-### Arbitrage Formula
+The bot looks for price discrepancies between platforms:
 
-```
-Arbitrage exists when: YES_ask + NO_ask < $1.00
-Profit = $1.00 - (YES_ask + NO_ask)
-```
+**Strategy 1:** Buy YES on Polymarket + Buy NO on Kalshi  
+**Strategy 2:** Buy YES on Kalshi + Buy NO on Polymarket
 
-## Output
+Arbitrage exists when: `YES_ask + NO_ask < $1.00`
 
-### CSV Log (`arb_opportunities.csv`)
+### Example
+
+- Polymarket YES ask: $0.42
+- Kalshi NO ask: $0.56
+- **Total cost:** $0.98
+- **Guaranteed payout:** $1.00
+- **Profit:** 2¢ per contract
+
+### Market Matching
+
+Markets are matched using keyword overlap (Jaccard similarity threshold: 30%).
+
+## Dashboard
+
+The web dashboard shows:
+
+- **Live stats**: Market counts, matched pairs, opportunities found
+- **Opportunity feed**: Last 20 detected arbitrage opportunities with:
+  - Timestamp
+  - Market pair
+  - Strategy (poly_yes_kalshi_no or kalshi_yes_poly_no)
+  - Prices and profit
+- **Auto-updates** every 2 seconds via Server-Sent Events
+
+## CSV Output
+
+All detected opportunities are logged to `arb_opportunities.csv`:
 
 ```csv
 timestamp,market_pair,polymarket_market,kalshi_market,strategy,poly_price,kalshi_price,total_cost,profit_cents,poly_market_id,kalshi_ticker
-2026-02-04T14:23:15,Fed Rate Cut / FED-RATE-CUT,Will Fed cut rates?,Fed Rate Decision,poly_yes_kalshi_no,0.4200,0.5700,0.9900,1.00,0x1a2b3c...,FED-26FEB04-T4.25
 ```
 
-### Dashboard
+## Configuration
 
-- **Live Stats**: Market counts, matched pairs, opportunities found
-- **Real-time Feed**: Last 20 opportunities with prices and profit
-- **Auto-refresh**: Updates every 2 seconds via Server-Sent Events
+Edit `.env` to adjust:
+
+- `POLL_INTERVAL_SECONDS` - How often to scan (default: 10)
+- `MIN_PROFIT_CENTS` - Minimum profit threshold (default: 1.0¢)
+- `LOG_FILE` - CSV output path
+- `EXECUTION_ENABLED` - Enable trade execution (default: false)
+
+## Future Enhancements
+
+### Execution Mode
+
+To enable automated trading:
+
+1. Add your Polymarket private key to `.env`:
+   ```
+   POLYMARKET_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
+   ```
+
+2. Set execution flag:
+   ```
+   EXECUTION_ENABLED=true
+   ```
+
+3. Restart the monitor
+
+### Speed Optimizations
+
+- WebSocket clients for real-time orderbook updates
+- Parallel orderbook fetching
+- Redis caching for market data
+
+### Improved Matching
+
+- Fuzzy string matching (Levenshtein distance)
+- Manual market pair mapping file
+- ML-based market similarity
 
 ## Project Structure
 
 ```
 polymarket-kalshi-monitor/
-├── main.py                 # Entry point, FastAPI server, monitoring loop
-├── kalshi_client.py        # Kalshi API client with RSA signing
-├── polymarket_client.py    # Polymarket Gamma API client
-├── arbitrage_detector.py   # Core detection logic
-├── requirements.txt        # Python dependencies
-├── .env.example           # Configuration template
-└── README.md              # This file
+├── main.py                  # FastAPI server + monitoring loop
+├── kalshi_client.py         # Kalshi API client (RSA signing)
+├── polymarket_client.py     # Polymarket Gamma API client
+├── arbitrage_detector.py    # Core detection logic
+├── requirements.txt         # Python dependencies
+├── .env.example            # Configuration template
+├── .gitignore              # Git ignore patterns
+└── README.md               # This file
 ```
-
-## Future Enhancements
-
-- [ ] WebSocket support for real-time orderbook updates
-- [ ] Automatic order execution (when `EXECUTION_ENABLED=true`)
-- [ ] Multi-platform support (add PredictIt, Manifold, etc.)
-- [ ] Advanced market matching (Levenshtein distance)
-- [ ] Telegram/Discord alerts for opportunities
-
-## Security
-
-- **Never commit** `.env`, `*.pem`, or `*.csv` files
-- Store private keys securely
-- Use read-only API keys when possible
 
 ## License
 
 MIT
+
+## Disclaimer
+
+This software is for educational purposes only. Arbitrage trading carries risk. Use at your own discretion.
