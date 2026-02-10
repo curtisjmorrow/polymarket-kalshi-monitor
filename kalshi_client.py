@@ -73,16 +73,18 @@ class KalshiClient:
                     return await resp.json()
                 elif resp.status == 429:
                     if attempt < max_retries - 1:
-                        wait_time = (2 ** attempt) * 0.5  # 0.5s, 1s, 2s
-                        print(f"⚠️ Kalshi rate limit hit, retrying in {wait_time}s...")
+                        wait_time = (2 ** attempt) * 1.5  # 1.5s, 3s, 6s
                         await asyncio.sleep(wait_time)
+                        # Re-sign since timestamp changed
+                        path = url.replace(self.BASE_URL, "")
+                        headers = self._get_headers(method, path)
                         continue
                     else:
-                        print(f"❌ Kalshi rate limit exceeded after {max_retries} retries")
                         return None
                 else:
                     text = await resp.text()
-                    print(f"⚠️ Kalshi API error: {resp.status} - {text}")
+                    if resp.status != 404:
+                        print(f"⚠️ Kalshi API {resp.status}: {text[:100]}")
                     return None
         return None
     
@@ -134,14 +136,15 @@ class KalshiClient:
             if e.get('category') in non_sports_categories
         ]
         
-        # Get markets for each non-sports event
+        # Get markets for each non-sports event (throttled)
         all_markets = []
-        for event in non_sports_events[:20]:  # Limit to avoid too many API calls
+        for event in non_sports_events[:15]:  # Cap to stay within rate limits
             markets = await self.get_markets_for_event(event.get('event_ticker', ''))
             for m in markets:
                 m['event_title'] = event.get('title', '')
                 m['category'] = event.get('category', '')
             all_markets.extend(markets)
+            await asyncio.sleep(0.3)  # Throttle: ~3 req/s
             
             if len(all_markets) >= limit:
                 break

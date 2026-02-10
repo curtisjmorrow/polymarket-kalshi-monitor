@@ -126,11 +126,11 @@ class MarketMatcher:
     def update_markets(self, poly_markets: List[dict], kalshi_markets: List[dict]):
         """Update internal title maps with current market data."""
         self.poly_titles = {
-            m.get('condition_id', ''): m.get('question', '')
-            for m in poly_markets if m.get('condition_id')
+            (m.get('condition_id') or m.get('conditionId', '')): m.get('question', '')
+            for m in poly_markets if (m.get('condition_id') or m.get('conditionId'))
         }
         self.kalshi_titles = {
-            m.get('ticker', ''): m.get('title', '')
+            m.get('ticker', ''): (m.get('title', '') or m.get('event_title', ''))
             for m in kalshi_markets if m.get('ticker')
         }
     

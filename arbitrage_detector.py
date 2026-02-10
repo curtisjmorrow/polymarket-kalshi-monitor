@@ -75,7 +75,7 @@ class ArbitrageDetector:
         matched = []
         
         for poly in poly_markets:
-            poly_id = poly.get('condition_id', '')
+            poly_id = poly.get('condition_id') or poly.get('conditionId', '')
             poly_title = poly.get('question', '')
             
             if not poly_id:
@@ -261,7 +261,7 @@ class ArbitrageDetector:
             if profit_cents >= self.min_profit_cents:
                 ts = datetime.now(timezone.utc).isoformat()
                 market_title = market.get('question' if platform == 'polymarket' else 'title', 'Unknown')
-                market_id = market.get('condition_id' if platform == 'polymarket' else 'ticker', '')
+                market_id = (market.get('condition_id') or market.get('conditionId', '')) if platform == 'polymarket' else market.get('ticker', '')
                 
                 outcome_names = ", ".join(o.get('outcome', '?')[:15] for o in outcome_prices[:5])
                 if len(outcome_prices) > 5:
@@ -297,8 +297,10 @@ class ArbitrageDetector:
         market_pair = " vs ".join(market_titles)
         
         # Get market IDs
-        id_field = 'condition_id' if platform == 'polymarket' else 'ticker'
-        market_ids = [m.get(id_field, '') for m in violation.markets]
+        if platform == 'polymarket':
+            market_ids = [(m.get('condition_id') or m.get('conditionId', '')) for m in violation.markets]
+        else:
+            market_ids = [m.get('ticker', '') for m in violation.markets]
         
         # Total cost (sum of all involved prices)
         total_cost = sum(violation.prices.values())

@@ -132,7 +132,7 @@ class LogicalConstraintDetector:
         # Extract dates for all markets
         market_dates: List[Tuple[Dict, Optional[datetime]]] = []
         for market in markets:
-            title = market.get('question' if platform == 'polymarket' else 'title', '')
+            title = market.get('question', '') if platform == 'polymarket' else market.get('title', '')
             date = self.extract_date_from_title(title)
             if date:
                 market_dates.append((market, date))
@@ -156,8 +156,8 @@ class LogicalConstraintDetector:
                 if similarity > 0.6:  # 60% word overlap
                     # Create constraint: earlier <= later
                     if d1 < d2:
-                        earlier_id = m1.get('condition_id' if platform == 'polymarket' else 'ticker', '')
-                        later_id = m2.get('condition_id' if platform == 'polymarket' else 'ticker', '')
+                        earlier_id = (m1.get('condition_id') or m1.get('conditionId', '')) if platform == 'polymarket' else m1.get('ticker', '')
+                        later_id = (m2.get('condition_id') or m2.get('conditionId', '')) if platform == 'polymarket' else m2.get('ticker', '')
                         
                         constraints.append(LogicalConstraint(
                             constraint_type=ConstraintType.SUPERSET,
@@ -167,8 +167,8 @@ class LogicalConstraintDetector:
                             description=f"Earlier date ({d1.strftime('%b %Y')}) must be <= later date ({d2.strftime('%b %Y')})"
                         ))
                     elif d2 < d1:
-                        earlier_id = m2.get('condition_id' if platform == 'polymarket' else 'ticker', '')
-                        later_id = m1.get('condition_id' if platform == 'polymarket' else 'ticker', '')
+                        earlier_id = (m2.get('condition_id') or m2.get('conditionId', '')) if platform == 'polymarket' else m2.get('ticker', '')
+                        later_id = (m1.get('condition_id') or m1.get('conditionId', '')) if platform == 'polymarket' else m1.get('ticker', '')
                         
                         constraints.append(LogicalConstraint(
                             constraint_type=ConstraintType.SUPERSET,
@@ -259,8 +259,10 @@ class LogicalConstraintDetector:
         constraints = self.find_temporal_supersets(markets, platform)
         
         # Build metadata map
-        id_field = 'condition_id' if platform == 'polymarket' else 'ticker'
-        market_metadata = {m.get(id_field, ''): m for m in markets}
+        if platform == 'polymarket':
+            market_metadata = {(m.get('condition_id') or m.get('conditionId', '')): m for m in markets}
+        else:
+            market_metadata = {m.get('ticker', ''): m for m in markets}
         
         # Detect violations
         violations = self.detect_violations(constraints, prices, market_metadata)

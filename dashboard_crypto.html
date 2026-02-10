@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>⚙️ Crypto Temporal Arb Monitor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'SF Mono', 'Fira Code', Monaco, monospace;
+            background: #0a0a0a; color: #e0e0e0; padding: 20px; min-height: 100vh;
+        }
+        .header {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 2px solid #00ff41; padding-bottom: 15px; margin-bottom: 20px;
+        }
+        h1 { font-size: 22px; color: #00ff41; }
+        .status-pill {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: #111; border: 1px solid #333; border-radius: 20px;
+            padding: 4px 14px; font-size: 12px;
+        }
+        .dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 2s infinite; }
+        .dot.green { background: #00ff41; }
+        .dot.red { background: #ff4141; }
+        .dot.yellow { background: #ffaa00; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+        .prices { display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; }
+        .price-card {
+            background: #111; border: 1px solid #222; border-radius: 6px;
+            padding: 12px 20px; min-width: 160px; text-align: center;
+        }
+        .price-coin { color: #888; font-size: 12px; margin-bottom: 4px; }
+        .price-value { font-size: 22px; font-weight: 700; color: #00ff41; }
+
+        .stats {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 12px; margin-bottom: 25px;
+        }
+        .stat { background: #111; border: 1px solid #222; border-radius: 6px; padding: 12px; }
+        .stat-label { color: #666; font-size: 11px; margin-bottom: 3px; text-transform: uppercase; }
+        .stat-value { font-size: 20px; font-weight: 700; color: #fff; }
+
+        .section-title {
+            font-size: 16px; color: #00ff41; margin-bottom: 12px;
+            padding-bottom: 8px; border-bottom: 1px solid #222;
+        }
+        .opps-container {
+            background: #111; border: 1px solid #222; border-radius: 6px;
+            padding: 20px; margin-bottom: 25px; max-height: 60vh; overflow-y: auto;
+        }
+        .opp {
+            background: #0a0a0a; border: 1px solid #222; border-radius: 6px;
+            padding: 14px; margin-bottom: 10px;
+        }
+        .opp.buy-yes { border-left: 4px solid #00ff41; }
+        .opp.buy-no  { border-left: 4px solid #ff6b6b; }
+        .opp-header {
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
+        }
+        .opp-time { color: #555; font-size: 11px; }
+        .opp-badge {
+            font-size: 10px; padding: 2px 8px; border-radius: 10px;
+            text-transform: uppercase; font-weight: 600; margin-right: 4px;
+        }
+        .opp-badge.polymarket { background: #1a1a3e; color: #7b7bff; border: 1px solid #3a3a6e; }
+        .opp-badge.kalshi { background: #1a3e1a; color: #7bff7b; border: 1px solid #3a6e3a; }
+        .opp-badge.btc { background: #3e2e0a; color: #f7931a; border: 1px solid #6e4e1a; }
+        .opp-badge.eth { background: #1a1a3e; color: #627eea; border: 1px solid #3a3a6e; }
+        .opp-badge.sol { background: #1a3e3e; color: #00ffa3; border: 1px solid #2a5e5e; }
+
+        .opp-market { font-size: 13px; color: #ccc; margin-bottom: 10px; }
+        .opp-market a { color: #4da6ff; text-decoration: none; }
+        .opp-market a:hover { text-decoration: underline; color: #7bc0ff; }
+        .trade-box {
+            background: #0d0d0d; border: 1px solid #333; border-radius: 4px;
+            padding: 10px 14px; margin-bottom: 8px;
+        }
+        .trade-action { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+        .trade-action.buy  { color: #00ff41; }
+        .trade-action.sell { color: #ff6b6b; }
+        .trade-detail { font-size: 12px; color: #999; line-height: 1.6; }
+        .trade-detail span { color: #ffaa00; font-weight: 600; }
+        .opp-reason { font-size: 12px; color: #888; font-style: italic; margin-top: 6px; }
+        .no-opps { color: #555; text-align: center; padding: 40px; font-size: 13px; }
+
+        .markets-section {
+            background: #111; border: 1px solid #222; border-radius: 6px;
+            padding: 20px; margin-bottom: 25px;
+        }
+        .market-item {
+            font-size: 11px; color: #666; padding: 4px 0;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        .market-item span { color: #aaa; }
+        .error-log { background: #1a0a0a; border: 1px solid #331111; border-radius: 6px; padding: 15px; }
+        .error-item { font-size: 11px; color: #ff6b6b; margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>⚙️ Crypto Temporal Arbitrage Monitor</h1>
+        <div class="status-pill">
+            <div class="dot green" id="status-dot"></div>
+            <span id="status-text">Connecting...</span>
+        </div>
+    </div>
+
+    <div class="prices" id="prices"></div>
+
+    <div class="stats">
+        <div class="stat"><div class="stat-label">Last Scan</div><div class="stat-value" id="s-last">--</div></div>
+        <div class="stat"><div class="stat-label">Scans</div><div class="stat-value" id="s-count">0</div></div>
+        <div class="stat"><div class="stat-label">Poly Crypto</div><div class="stat-value" id="s-poly">0</div></div>
+        <div class="stat"><div class="stat-label">Kalshi Crypto</div><div class="stat-value" id="s-kalshi">0</div></div>
+        <div class="stat"><div class="stat-label">Total Scanned</div><div class="stat-value" id="s-total">0</div></div>
+        <div class="stat"><div class="stat-label">Arb Signals</div><div class="stat-value" id="s-opps" style="color:#ffaa00">0</div></div>
+    </div>
+
+    <div class="opps-container">
+        <div class="section-title">🎯 Detected Arbitrage Opportunities</div>
+        <div id="opps-list"><div class="no-opps">Waiting for data...</div></div>
+    </div>
+
+    <div class="markets-section">
+        <div class="section-title">📊 Recently Scanned Markets</div>
+        <div id="markets-list" style="max-height:200px;overflow-y:auto"><div class="no-opps">Loading...</div></div>
+    </div>
+
+    <div id="errors-section" style="display:none">
+        <div class="section-title" style="color:#ff6b6b">Recent Errors</div>
+        <div class="error-log" id="errors-list"></div>
+    </div>
+
+    <script>
+    const src = new EventSource("/stream");
+    src.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        const dot = document.getElementById('status-dot');
+        const stxt = document.getElementById('status-text');
+        dot.className = 'dot ' + (d.status === 'running' ? 'green' : d.status === 'error' ? 'red' : 'yellow');
+        stxt.textContent = d.status.charAt(0).toUpperCase() + d.status.slice(1);
+
+        // Spot prices
+        const pc = document.getElementById('prices');
+        if (d.spot_prices && Object.keys(d.spot_prices).length) {
+            pc.innerHTML = Object.entries(d.spot_prices).map(([c, p]) =>
+                '<div class="price-card"><div class="price-coin">'+c+'/USD</div><div class="price-value">$'+Number(p).toLocaleString(undefined,{maximumFractionDigits:2})+'</div></div>'
+            ).join('');
+        }
+
+        // Stats
+        document.getElementById('s-last').textContent = d.last_scan || '--';
+        document.getElementById('s-count').textContent = d.scan_count || 0;
+        document.getElementById('s-poly').textContent = d.poly_crypto_count || 0;
+        document.getElementById('s-kalshi').textContent = d.kalshi_crypto_count || 0;
+        document.getElementById('s-total').textContent = d.total_markets_scanned || 0;
+        document.getElementById('s-opps').textContent = (d.opportunities || []).length;
+
+        // Opportunities
+        const ol = document.getElementById('opps-list');
+        const opps = d.opportunities || [];
+        if (!opps.length) {
+            ol.innerHTML = '<div class="no-opps">No arbitrage opportunities detected yet. Scanning every 5s...</div>';
+        } else {
+            ol.innerHTML = opps.slice().reverse().map(function(o) {
+                var cls = o.side === 'BUY YES' ? 'buy-yes' : 'buy-no';
+                var coinCls = (o.coin||'').toLowerCase();
+                var actionCls = o.side === 'BUY YES' ? 'buy' : 'sell';
+                return '<div class="opp '+cls+'">'
+                    + '<div class="opp-header">'
+                    + '<div><span class="opp-badge '+o.source+'">'+o.source+'</span>'
+                    + '<span class="opp-badge '+coinCls+'">'+(o.coin||'')+'</span></div>'
+                    + '<div class="opp-time">'+new Date(o.timestamp).toLocaleString()+'</div>'
+                    + '</div>'
+                    + '<div class="opp-market">' + (o.url ? '<a href="'+o.url+'" target="_blank">'+o.market+' ↗</a>' : o.market) + '</div>'
+                    + '<div class="trade-box">'
+                    + '<div class="trade-action '+actionCls+'">'+(o.trade_action||o.side)+'</div>'
+                    + '<div class="trade-detail">'+(o.trade_detail||o.reason)+'</div>'
+                    + '</div>'
+                    + '<div class="opp-reason">'+o.reason+'</div>'
+                    + '</div>';
+            }).join('');
+        }
+
+        // Recent markets
+        var ml = document.getElementById('markets-list');
+        var mks = d.recent_markets || [];
+        if (mks.length) {
+            ml.innerHTML = mks.map(function(m) {
+                return '<div class="market-item"><span>'+m.source+'</span> '+m.title+' <span>'+m.ticker+'</span></div>';
+            }).join('');
+        }
+
+        // Errors
+        var errs = d.errors || [];
+        var es = document.getElementById('errors-section');
+        if (errs.length) {
+            es.style.display = 'block';
+            document.getElementById('errors-list').innerHTML = errs.slice(-10).reverse()
+                .map(function(x) { return '<div class="error-item">'+x+'</div>'; }).join('');
+        } else {
+            es.style.display = 'none';
+        }
+    };
+    src.onerror = function() {
+        document.getElementById('status-dot').className = 'dot red';
+        document.getElementById('status-text').textContent = 'Disconnected';
+    };
+    </script>
+</body>
+</html>
