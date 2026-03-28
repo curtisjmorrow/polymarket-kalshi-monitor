@@ -433,6 +433,7 @@ def _make_opp(market, arb_type, strategy, profit_cents, price_a, price_b, source
 # ─── Dashboard HTML ─────────────────────────────────────────────────────
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html><head><title>BTC Arb Bot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
     body{font-family:'JetBrains Mono',monospace;background:#0d1117;color:#c9d1d9;padding:20px;margin:0}
     .hdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #30363d;padding-bottom:12px;margin-bottom:20px}
@@ -441,10 +442,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px}
     .card h3{color:#8b949e;font-size:0.65em;text-transform:uppercase;margin-bottom:4px}
     .val{font-size:1.8em;font-weight:700;color:#f0f6fc} .sub{color:#3fb950;font-size:0.75em;margin-top:3px}
+    .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
     table{width:100%;border-collapse:collapse;font-size:0.75em;margin-top:10px}
     th{text-align:left;padding:6px;color:#8b949e;border-bottom:1px solid #30363d}
     td{padding:6px;border-bottom:1px solid #21262d}
     .profit{color:#3fb950;font-weight:700} a{color:#58a6ff;text-decoration:none}
+    @media(max-width:600px){
+        body{padding:12px}
+        .hdr{flex-direction:column;align-items:flex-start;gap:8px}
+        .hdr h1{font-size:1.1em}
+        .grid{grid-template-columns:repeat(2,1fr);gap:8px}
+        .card{padding:10px}
+        .val{font-size:1.3em}
+        .card h3{font-size:0.6em}
+        table{font-size:0.65em;min-width:420px}
+        th,td{padding:4px}
+    }
+    @media(max-width:380px){.grid{grid-template-columns:1fr}}
 </style></head><body>
 <div class="hdr"><h1>🟠 BTC Arb Bot</h1><span class="badge" id="status">LOADING</span></div>
 <div class="grid">
@@ -454,8 +468,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card"><h3>Scan</h3><div class="val" id="scan">--</div><div class="sub" id="last-scan">--</div></div>
     <div class="card"><h3>Session Opps</h3><div class="val" id="opps">--</div></div>
 </div>
-<table><thead><tr><th>Time</th><th>Type</th><th>Strategy</th><th>Profit</th><th>Link</th></tr></thead>
-<tbody id="opp-body"><tr><td colspan="5" style="text-align:center;color:#8b949e">Waiting...</td></tr></tbody></table>
+<div class="table-wrap"><table><thead><tr><th>Time</th><th>Type</th><th>Strategy</th><th>Profit</th><th>Link</th></tr></thead>
+<tbody id="opp-body"><tr><td colspan="5" style="text-align:center;color:#8b949e">Waiting...</td></tr></tbody></table></div>
 <script>
 const es=new EventSource("/stream");
 es.onmessage=e=>{

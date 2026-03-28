@@ -1,29 +1,28 @@
-# Python
-__pycache__/
-*.py[cod]
+
 *$py.class
-*.so
-.Python
-venv/
+*.csv
+*.db
+.DS_Store
+.env
 env/
 ENV/
-
-# Sensitive files
-.env
-*.pem
-*.key
-*.csv
-*.log
-nohup.out
-monitor.log
-
 # IDE
-.vscode/
 .idea/
-*.swp
-*.swo
-
+*.key
+*.log
+monitor.log
+nohup.out
 # OS
-.DS_Store
+*.pem
+__pycache__/
+*.py[cod]
+# Python
+.Python
+# Sensitive files
+*.so
+*.swo
+*.swp
 Thumbs.db
+venv/
+.vscode/
 *.db
